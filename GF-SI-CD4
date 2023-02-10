@@ -1,0 +1,176 @@
+import scanpy as sc
+import pandas as pd
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import seaborn as sn
+import numpy as np
+from scipy.stats import kruskal
+from matplotlib import cm
+
+# Styling
+plt.style.use('seaborn-white')
+plt.style.use('seaborn-white')
+mpl.rcParams['savefig.dpi'] = 500
+PALETTE = 'Set1'
+
+# Genes of Interest
+gois = ['Gata3', 'Il17a', 'Itgb7', 'Rbpj' , 'Ptpn13', 'Basp1', 'Tnfrsf11a' , 'Lgmn' , 'Il9r', 'Rora', 'Rbpj']
+
+# Preprocessing
+wt = sc.read_10x_h5('BRI-835_filtered_feature_bc_matrix.h5')
+ko = sc.read_10x_h5('BRI-836_filtered_feature_bc_matrix.h5')
+wt.obs['genotype'] = 'wt'
+ko.obs['genotype'] = 'ko'
+wt.var_names_make_unique()
+ko.var_names_make_unique()
+adata = wt.concatenate(ko)
+sc.pp.filter_cells(adata, min_counts=30)
+sc.pp.filter_genes(adata, min_cells=10)
+sc.pp.normalize_total(adata, target_sum=1e4)
+sc.pp.log1p(adata)
+adata.raw = adata
+sc.pp.highly_variable_genes(adata)
+sc.pp.scale(adata)
+sc.pp.neighbors(adata)
+sc.tl.leiden(adata, resolution=0.3)
+adata = adata[~adata.obs['leiden'].isin({'5', '6'})] #subset clusters (preprocessing was reran after subsetting cell)
+sc.tl.umap(adata)
+
+
+
+# UMAP
+sc.pl.umap(adata, wspace=0.5, color=['leiden'], cmap='Reds', palette=PALETTE, save='_leiden_combined.png')
+#
+x_tick_vals = np.arange(min(adata.obsm['X_umap'][:,0]), max(adata.obsm['X_umap'][:,0]), step=2, dtype=int)
+y_tick_vals = np.arange(min(adata.obsm['X_umap'][:,1]), max(adata.obsm['X_umap'][:,1]), step=2, dtype=int)
+labels = sorted(set(adata.obs['leiden']))
+lut = dict(zip(labels, sn.color_palette(PALETTE, n_colors=len(labels))))
+row_colors = adata.obs['leiden'].astype(str).map(lut)
+plt.clf()
+plt.cla()
+sc.pl.umap(adata[adata.obs['genotype'] == 'ko'], wspace=0.5, color=['leiden'], palette=sn.color_palette(PALETTE, n_colors=len(labels)), return_fig=True)
+plt.xticks(x_tick_vals)
+plt.yticks(y_tick_vals)
+plt.savefig('umap_leiden_ko.png')
+#
+plt.clf()
+plt.cla()
+sc.pl.umap(adata[adata.obs['genotype'] == 'wt'], wspace=0.5, color=['leiden'], palette=sn.color_palette(PALETTE, n_colors=len(labels)), return_fig=True)
+plt.xticks(x_tick_vals)
+plt.yticks(y_tick_vals)
+plt.savefig('umap_leiden_wt.png')
+#
+plt.clf()
+plt.cla()
+sc.pl.umap(adata, wspace=0.5, color=['leiden', 'genotype'], palette=sn.color_palette(PALETTE, n_colors=len(labels)), return_fig=True)
+plt.xticks(x_tick_vals)
+plt.yticks(y_tick_vals)
+plt.savefig('umap_all_cells.png')
+#
+for g in gois:
+    sc.pl.umap(adata, color=[g], save='_combined_' + g + '.png', cmap='Reds')
+    sc.pl.umap(adata[adata.obs['genotype'] == 'wt'], color=[g], save='_wt_' + g + '.png', cmap='Reds')
+    sc.pl.umap(adata[adata.obs['genotype'] == 'ko'], color=[g], save='_ko_' + g + '.png', cmap='Reds')
+#
+gois = ['Il17a', 'Rbpj', 'Basp1', 'Tnfrsf11a' , 'Lgmn' , 'Il9r', 'Rora', 'Rbpj']
+adata.obs['genotype'] = adata.obs['genotype'].cat.reorder_categories(['wt', 'ko'])
+for goi in gois:
+    sc.pl.violin(adata[adata.obs['leiden'] == '1'], goi, groupby='genotype', palette=PALETTE, save='_' + goi + '_cluster_1_by_genotype.png')
+    with open(goi + '_cluster_1_wt_vs_ko_stats.txt', 'w') as f:
+        f.write(str(kruskal(adata[(adata.obs['leiden'] == '1') & (adata.obs['genotype'] == 'wt')][:,goi].X[:,0], adata[(adata.obs['leiden'] == '1') & (adata.obs['genotype'] == 'ko')][:,goi].X[:,0])))
+#
+for goi in gois:
+    sc.pl.violin(adata, goi, groupby='genotype', palette=PALETTE, save='_' + goi + '_all_cells_by_genotype.png')
+    sc.pl.violin(adata, goi, groupby='leiden', palette=PALETTE, save='_' + goi + '_all_cells_by_leiden.png')
+    with open(D + goi + '_all_cells_wt_vs_ko_stats.txt', 'w') as f:
+        f.write(str(kruskal(adata[adata.obs['genotype'] == 'wt'][:,goi].X[:,0], adata[adata.obs['genotype'] == 'ko'][:,goi].X[:,0])))
+#
+# Violin Plots
+def plot_same_violin(adata, name, max_expr):
+    plt.clf()
+    plt.cla()
+    plot_df = pd.DataFrame()
+    plot_df[goi] = adata[:,goi].X.toarray()[:,0]
+    plot_df['leiden'] = adata.obs['leiden'].values
+    ax = sn.violinplot(x='leiden', y=goi, inner='point', data=plot_df, s=1)
+    ax.set(ylim=(0, max_expr))
+    plt.savefig(goi + '_' + name + '.png')
+#
+for goi in gois:
+    max_expr = float(np.max(adata[:,goi].X.toarray()))
+    plot_same_violin(adata, 'combined', max_expr)
+    plot_same_violin(adata[adata.obs['genotype'] == 'wt'], 'wt', max_expr)
+    plot_same_violin(adata[adata.obs['genotype'] == 'ko'], 'ko', max_expr)
+#
+# Cluster/Genotype Proportions
+clusters = sorted(set(adata.obs['leiden']))
+proportion_cells_df = pd.DataFrame(index=clusters, columns=['wt', 'ko'])
+for cluster in clusters:
+    proportion_cells_df.loc[cluster]['wt'] = adata[(adata.obs['leiden'] == cluster) & (adata.obs['genotype'] == 'wt')].shape[0] / adata[adata.obs['leiden'] == cluster].shape[0]
+    proportion_cells_df.loc[cluster]['ko'] = adata[(adata.obs['leiden'] == cluster) & (adata.obs['genotype'] == 'ko')].shape[0] / adata[adata.obs['leiden'] == cluster].shape[0]
+#
+plt.clf()
+plt.cla()
+plt.xlabel('Cluster')
+plt.title('Proportion by Genotype')
+lut = dict(zip(labels, sn.color_palette(PALETTE, n_colors=len(labels))))
+row_colors = proportion_cells_df.index.astype(str).map(lut)
+proportion_cells_df.plot(kind='bar', stacked=True, colormap=PALETTE, figsize=(12, 12))
+plt.legend(loc='center left', bbox_to_anchor=(1.0, 0.5))
+plt.savefig('proportion_cells_by_genotype.png')
+#
+proportion_clusters_df = pd.DataFrame(index=['wt', 'ko'], columns=clusters)
+for cluster in clusters:
+    proportion_clusters_df[cluster]['wt'] = adata[(adata.obs['leiden'] == cluster) & (adata.obs['genotype'] == 'wt')].shape[0] / adata[adata.obs['genotype'] == 'wt'].shape[0]
+    proportion_clusters_df[cluster]['ko'] = adata[(adata.obs['leiden'] == cluster) & (adata.obs['genotype'] == 'ko')].shape[0] / adata[adata.obs['genotype'] == 'ko'].shape[0]
+set1 = cm.get_cmap('Set1', 9)
+proportion_clusters_df['6'] = 0
+proportion_clusters_df['7'] = 0
+proportion_clusters_df['8'] = 0
+proportion_clusters_df['9'] = 0
+#
+plt.clf()
+plt.cla()
+plt.xlabel('Genotype')
+plt.title('Proportion by Cluster')
+proportion_clusters_df.plot(kind='bar', colormap=set1, stacked=True, figsize=(12, 12))
+plt.legend(loc='center left', bbox_to_anchor=(1.0, 0.5))
+plt.savefig('proportion_cluster_by_genotype.png')
+# Dotplots
+gois = ['Il17a', 'Basp1', 'Tnfrsf11a' , 'Lgmn', 'Rbpj']
+sc.pl.dotplot(adata[adata.obs['genotype'] == 'wt'], var_names=gois, groupby='leiden', save='_wt_by_cluster_second_version.png')
+sc.pl.dotplot(adata[adata.obs['genotype'] == 'ko'], var_names=gois, groupby='leiden', save='_ko_by_cluster_second_version.png')
+
+# Gaublomme signatures
+
+g_df = pd.read_csv(D + 'all_Gaublomme_2016_signatures.pgf.txt', sep=' ', index_col=0, header=None)
+
+sigs = ['Th17_self_renewing', 'Th17_Th1_like_effector', 'Th17_Th1_like_effector_CNS', 'Th17_Dysfunctional_senescent', 'Th17_pre_Th1_like_effector']
+
+# Uppercase names for matching
+adata.var.index = adata.var.index.str.upper()
+adata.raw.var.index = adata.raw.var.index.str.upper()
+adata.var_names_make_unique()
+#
+average_df = pd.DataFrame(index=sigs, columns=['Cluster 1 Average Composite Score'])
+cluster1 = adata[adata.obs['leiden'] == '1']
+total_df = pd.DataFrame(index=cluster1.obs.index, columns=sigs)
+c = 0
+# Composite Signature Calculation
+for sig in sigs:
+    sc.tl.score_genes(adata, gene_list=[g for g in g_df[(g_df.index == sig) & (g_df[1] == 'plus')][2] if g in adata.var.index], score_name=sig + '_plus')
+    sc.tl.score_genes(adata, gene_list=[g for g in g_df[(g_df.index == sig) & (g_df[1] == 'minus')][2] if g in adata.var.index], score_name=sig + '_minus')
+    adata.obs[sig + '_composite_score'] = adata.obs[sig + '_plus'] - adata.obs[sig + '_minus']
+    cluster1 = adata[adata.obs['leiden'] == '1']
+    with open(sig + '_cluster_1_composite_signature_score_kruskal_wallace_test.txt', 'w') as f:
+        f.write(str(kruskal(cluster1.obs[sig + '_composite_score'], adata.obs[sig + '_composite_score'])))
+    average_df['Cluster 1 Average Composite Score'][c] = np.mean(cluster1.obs[sig + '_composite_score'])
+    total_df[sig] = cluster1.obs[sig + '_composite_score']
+    c += 1
+average_df.index.name = 'Th17 Signature'
+average_df = average_df.sort_values('Cluster 1 Average Composite Score', ascending=False)
+plt.clf()
+plt.cla()
+ax = sn.barplot(data=average_df, x='Cluster 1 Average Composite Score', y=average_df.index, palette=['red', 'red', 'blue', 'blue', 'blue'])
+plt.legend([],[], frameon=False)
+plt.show()
